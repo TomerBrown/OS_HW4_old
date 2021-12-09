@@ -1,0 +1,3 @@
+#!/bin/bash
+gcc Queue.c -o Queue.out
+./Queue.out
