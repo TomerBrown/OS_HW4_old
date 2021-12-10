@@ -4,10 +4,19 @@
 #include <assert.h>
 #include <limits.h>
 #include <dirent.h>
-
+#include <sys/stat.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <stdatomic.h>
 #define SUCCESFULL 0
 #define PROBELM -1
 
+
+
+
+
+
+//------------------------------
 /* -----------------------------------------------------------------------------------------------
 ----------------------------------    Queue Related Functions    ---------------------------------
 -------------------------------------------------------------------------------------------------*/
@@ -19,14 +28,14 @@ Fields:
 */
 typedef struct Node {
     struct Node* next;
-    char* dir_name;
+    char dir_name [PATH_MAX];
 } Node;
 
 /*A function that initializes a node in the queue with dir_name value*/
 Node* init_Node (char* dir_name){
     Node* node = calloc(1 , sizeof(Node));
+    strcpy(&(node->dir_name[0]),dir_name);
     node -> next = NULL;
-    node ->dir_name = dir_name;
     return node;
 }
 
@@ -103,11 +112,11 @@ void print_queue(Queue* q){
             printf("%s,",node->dir_name);
         }
         else{
-            printf("%s]\n",node->dir_name);
+            printf("%s",node->dir_name);
         }
-        
         node = node->next;
     }
+    printf("]\n");
 }
 
 /*Given a message to print the function prints it and then frees the message*/
@@ -115,6 +124,17 @@ void print_message (char* message){
     printf("%s\n",message);
     free(message);
 }
+
+
+// ------------------------------
+//         Static Variables
+
+//The queue that holds all the directories need to be search 
+static Queue directory_queue;
+
+//make it atomic to assure that incrementing the counter would be atomic (will assure that will be incremented properly)
+static atomic_int counter = 0;
+
 
 /* -----------------------------------------------------------------------------------------------
 -----------------------------    Main Related Functions    ---------------------------------------
@@ -147,26 +167,70 @@ int name_contains_term(char* name, char* term){
     return strstr(name,term)!=NULL;
 }
 
+char* extend_path (char* original_path,char* extention){
+    char* exteneded_path = calloc(1,PATH_MAX);
+    strcat(exteneded_path,original_path);
+    strcat(exteneded_path,"/");
+    strcat(exteneded_path,extention);
+    return exteneded_path;
+}
+
 
 int search_directory(char* dir_name,char* term){
+    struct stat info; // A struct to hold some data about file (linux fs api)
+    char* exteneded_path; // A string to hold the concatenated path
+    struct dirent* x; //could be either a file or a folder
+    if (access(dir_name,R_OK) != 0 || access(dir_name,X_OK) != 0){
+        printf("Directory %s: Permission denied.\n", dir_name);
+        return 1;
+    }
     DIR* dir = opendir(dir_name);
     if (dir==NULL){
+        printf("Directory %s: Permission denied.\n", dir_name);
         return 1;
     }
     
-    struct dirent* x; //could be either a file or a folder
     x = readdir(dir);
     while (x!=NULL){
-        if (name_contains_term(x->d_name,term)){
-            printf("%s\n",x->d_name);
+        
+        //todo: remove .git from here
+        if (strcmp(x->d_name,".")==0 || strcmp(x->d_name,"..")==0 || strcmp(x->d_name ,".git")==0){
+            //case it is . or .. ignore it
+            x = readdir(dir);
+            continue;
         }
+        
+        exteneded_path = extend_path(dir_name, x->d_name);
+
+        if (name_contains_term(x->d_name,term)){
+            //if the filename contains the term -> print it and increment the counter
+            printf("%s\n",exteneded_path);
+            //todo: make sure it is done atomicly
+            counter ++;
+        }
+        if (stat(exteneded_path,&info) < 0){
+            fprintf(stderr,"Error: can't get stat of directory entry for %s\n",exteneded_path);
+            return PROBELM;
+        }
+        if (S_ISDIR(info.st_mode)){
+            //If it is a directory add it to the queue
+            insert(&directory_queue , exteneded_path);
+        }
+
+        free(exteneded_path);
         x = readdir(dir);
     }
-
     closedir(dir);
     return 0;
 }
 
+void work(char* term){
+    char* dir;
+    while (!is_empty(&directory_queue)){
+        dir = pull(&directory_queue);
+        search_directory(dir,term);
+    }
+}
 /* -----------------------------------------------------------------------------------------------
 ----------------------------------------    MAIN    ----------------------------------------------
 -------------------------------------------------------------------------------------------------*/
@@ -183,10 +247,16 @@ int main (int argc, char* argv[]){
     int n = string_to_num(argv[3]); //num of threads to create
 
     if (n <= 0){
-        fprintf(stderr, "Error: number of threds entered (i.e third argument) is invalid.\n");
+        fprintf(stderr, "Error: number of threads entered (i.e third argument) is invalid.\n");
         return 1;
     }
     
+    directory_queue = init_Queue();
+    insert(&directory_queue, root_directory);
+    work (term);
+    printf("Done searching, found %d files\n", counter);
     //todo: assert that root directory can be searched
-    return search_directory(root_directory,term);
+    return SUCCESFULL;
+
+
 }
