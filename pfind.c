@@ -135,6 +135,15 @@ static Queue directory_queue;
 //make it atomic to assure that incrementing the counter would be atomic (will assure that will be incremented properly)
 static atomic_int counter = 0;
 
+//We Will use one lock to make sure that every insertion, pull or emptynesscheck will be mutual exclusive.
+pthread_mutex_t queue_lock;
+
+//A condition variable to check whether a thread needs to pull directory from directory_queue.
+pthread_cond_t empty_cond;
+
+//the term to be searched will be publicly available to all function who needs it (Read-Only)
+const char* term;
+
 
 /* -----------------------------------------------------------------------------------------------
 -----------------------------    Main Related Functions    ---------------------------------------
@@ -163,7 +172,7 @@ int string_to_num(char* s){
 -----------------------------    Directory search functions   ------------------------------------
 -------------------------------------------------------------------------------------------------*/
 /*The function returns 1 if and only if term is contained in name and 0 otherwise*/
-int name_contains_term(char* name, char* term){
+int name_contains_term(char* name, const char* term){
     return strstr(name,term)!=NULL;
 }
 
@@ -176,7 +185,7 @@ char* extend_path (char* original_path,char* extention){
 }
 
 
-int search_directory(char* dir_name,char* term){
+int search_directory(char* dir_name){
     struct stat info; // A struct to hold some data about file (linux fs api)
     char* exteneded_path; // A string to hold the concatenated path
     struct dirent* x; //could be either a file or a folder
@@ -224,12 +233,13 @@ int search_directory(char* dir_name,char* term){
     return 0;
 }
 
-void work(char* term){
+void* work(void){
     char* dir;
     while (!is_empty(&directory_queue)){
         dir = pull(&directory_queue);
-        search_directory(dir,term);
+        search_directory(dir);
     }
+    return NULL;
 }
 /* -----------------------------------------------------------------------------------------------
 ----------------------------------------    MAIN    ----------------------------------------------
@@ -243,7 +253,7 @@ int main (int argc, char* argv[]){
         return 1;
     }
     char* root_directory = argv[1];
-    char* term = argv[2];
+    term = argv[2];
     int n = string_to_num(argv[3]); //num of threads to create
 
     if (n <= 0){
@@ -253,10 +263,9 @@ int main (int argc, char* argv[]){
     
     directory_queue = init_Queue();
     insert(&directory_queue, root_directory);
-    work (term);
+    work ();
     printf("Done searching, found %d files\n", counter);
     //todo: assert that root directory can be searched
     return SUCCESFULL;
-
 
 }
